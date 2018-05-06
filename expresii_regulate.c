@@ -15,7 +15,7 @@ typedef struct _Token{
 	int line; // linia din fisierul de intrare
 	struct _Token *next; // inlantuire la urmatorul AL
 }Token;
-int line = 0;
+int line = 1;
 Token *lastToken, *tokens,*consumedTK,*crtTk;
 void err(const char *fmt,...){
 	va_list va;
@@ -801,7 +801,10 @@ void afisare(){
 int consume(int code){
 	if(crtTk->code == code){
 		printf("consume ->");
-		getEnum(crtTk->code); printf("\n");
+		if(getEnum(crtTk->code) == 5){
+			printf("  %s",crtTk->text);
+		}
+		printf("\n");
 		consumedTK = crtTk;
 		crtTk = crtTk->next;
 		return 1;
@@ -844,14 +847,17 @@ int typeBase(){
 	printf("typeBase ->");
 	getEnum(crtTk->code); printf("\n");
 	Token *initTk = crtTk;
+	
 	if(consume(INT) || consume(DOUBLE) || consume(CHAR))
 		return 1;
+
 	if(consume(STRUCT)){
 		if(consume(ID))
 			return 1;
 		else
 		tkerr(crtTk,"Lipseste ID -> typeBase");
 	}
+
 	crtTk = initTk;
 	return 0;
 }
@@ -881,6 +887,7 @@ int declVar(){
 			}
 		}
 	}
+
 	crtTk = initTk;
 	return 0;
 }
@@ -889,6 +896,7 @@ int arrayDecl(){
 	printf("arrayDecl ->");
 	getEnum(crtTk->code); printf("\n");
 	Token *initTk = crtTk;
+
 	if(consume(LBRACKET)){
 		expr();
 		if(consume(RBRACKET)){
@@ -897,6 +905,7 @@ int arrayDecl(){
 			tkerr(crtTk,"Lipseste ] -> arrayDecl");
 		}
 	}
+
 	crtTk = initTk;
 	return 0;
 }
@@ -905,18 +914,21 @@ int typeName(){
 	printf("typeName ->");
 	getEnum(crtTk->code); printf("\n");
 	Token *initTk = crtTk;
+
 	if(!typeBase()){
 		tkerr(crtTk,"Lipseste typeBase");
 		crtTk = initTk;
 		return 0;
 	}
 	arrayDecl();
+
 	return 1;
 }
 
 int unit(){
 	printf("unit ->");
 	getEnum(crtTk->code); printf("\n");
+
 	while(true){
 		if(declStruct() || declFunc() || declVar()) {}
 		else break;
@@ -927,6 +939,7 @@ int unit(){
 	else{
 		tkerr(crtTk, "Lipseste END");
 	}
+
 	return 0;
 }
 
@@ -979,6 +992,7 @@ int declFunc(){
 		}
 		return 1;
 	}
+
 	crtTk = initTk;
 	return 0;
 }
@@ -1014,11 +1028,10 @@ int stmCompound(){
 		if(consume(RACC)){
 			return 1;
 		}else{
-			tkerr(crtTk,"Lipseste )");
+			tkerr(crtTk,"Lipseste }");
 		}
-	}else{
-		tkerr(crtTk,"Lipseste (");
 	}
+
 	crtTk = initTk;
 	return 0;
 }
@@ -1072,7 +1085,7 @@ int stm(){
 					}else tkerr(crtTk,"Lipseste )");
 				}else tkerr(crtTk,"Lipseste ; -> stm 1");
 			}else tkerr(crtTk,"Lipseste ; -> stm 2");
-		}else tkerr(crtTk,"Lipseste (");
+		}else tkerr(crtTk,"Lipseste ( -> for");
 	}
 
 	if(consume(BREAK)){
@@ -1097,7 +1110,7 @@ int stm(){
 			return 1;
 		}
 	}
-
+	
 	crtTk = initTk;
 	return 0;
 }
@@ -1125,7 +1138,11 @@ int exprOrAux(){
 
 int exprOr(){
 	printf("exprOr ->");
-	getEnum(crtTk->code); printf("\n");
+	if(getEnum(crtTk->code)==5){
+		printf("%s\n",crtTk->text );
+	}
+
+	printf("\n");
 	Token *initTk = crtTk;
 
 	if(exprAnd()){
@@ -1182,6 +1199,7 @@ int exprEqAux(){
 	printf("exprEqAux ->");
 	getEnum(crtTk->code); printf("\n");
 	Token *initTk = crtTk;
+
 	if(consume(EQUAL) || consume(NOTEQ)){
 		if(exprRel()){
 			if(exprEqAux()){
@@ -1193,6 +1211,7 @@ int exprEqAux(){
 			tkerr(crtTk,"Lipseste exprRel()");
 		}
 	}
+
 	crtTk = initTk;
 	return 1;
 }
@@ -1227,12 +1246,11 @@ int exprAssign(){
 				tkerr(crtTk,"Lipseste exprAssign");
 			}
 		}
+		crtTk = initTk;
 	}
 
-    if(exprOr())
+	if(exprOr())
 		return 1;
-	// else
-	// 	tkerr(crtTk,"Lipseste exprOr");
 
 	crtTk = initTk;
 	return 0;
@@ -1372,11 +1390,10 @@ int exprCast(){
 			tkerr(crtTk,"Lipseste typeName");
 		}
 	}
+	crtTk = initTk;
 
 	if(exprUnary())
 			return 1;
-	// else
-	// 	tkerr(crtTk,"Lipseste exprUnary");
 
 	crtTk = initTk;
 	return 0;
@@ -1397,8 +1414,6 @@ int exprUnary(){
 
 	if(exprPostfix())
 		return 1;
-	// else
-	// 	tkerr(crtTk,"Lipseste exprPostfix");
 
 	crtTk = initTk;
 	return 0;
@@ -1406,7 +1421,8 @@ int exprUnary(){
 
 int exprPostfixAux(){
 	printf("exprPostfixAux ->");
-	getEnum(crtTk->code); printf("\n");
+	getEnum(crtTk->code); 
+	printf("\n");
 	Token *initTk = crtTk;
 
 	if(consume(DOT)){
@@ -1470,8 +1486,8 @@ int exprPrimary(){
 					if(expr()){}
 						else
 							tkerr(crtTk,"Lipseste expr dupa ,");
-					}
-			}else return 1;
+				}
+			}
 			if(consume(RPAR))
 				return 1;
 			else
@@ -1479,12 +1495,15 @@ int exprPrimary(){
 		}
 		return 1;
 	}
+
 	if(consume(CT_INT)){ 
 		return 1;
 	}
+
 	if(consume(CT_REAL)){ 
 		return 1;
 	}
+
 	if(consume(CT_STRING)){ 
 		return 1;
 	}
@@ -1506,9 +1525,16 @@ int exprPrimary(){
 }
 
 int expr(){
+	Token* initTk = crtTk;
 	printf("expr ->");
-	getEnum(crtTk->code); printf("\n");
-	return exprAssign();
+	getEnum(crtTk->code);
+	printf("\n");
+
+	if(exprAssign())
+		return 1;
+
+	crtTk = initTk;
+	return 0;
 }
 
 void terminare(void){
