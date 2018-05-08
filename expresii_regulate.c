@@ -16,6 +16,7 @@ typedef struct _Token{
 	struct _Token *next; // inlantuire la urmatorul AL
 }Token;
 int line = 1;
+int crtDepth = 0;
 Token *lastToken, *tokens,*consumedTK,*crtTk;
 void err(const char *fmt,...){
 	va_list va;
@@ -57,6 +58,61 @@ enum{
 	SEMICOLON, COMMA, LPAR, RPAR, LBRACKET, RBRACKET, LACC, RACC, 
 	ADD, SUB, MUL, DIV, DOT, AND, OR, NOT, ASSIGN, EQUAL, NOTEQ, LESS, LESSEQ, GREATER, GREATEREQ
 };
+enum{TB_INT,TB_DOUBLE,TB_CHAR,TB_STRUCT,TB_VOID};
+enum{CLS_VAR,CLS_FUNC,CLS_EXTFUNC,CLS_STRUCT};
+enum{MEM_GLOBAL,MEM_ARG,MEM_LOCAL};
+struct _Symbol;
+typedef struct _Symbol Symbol;
+typedef struct{
+	int typeBase; // TB_*
+	Symbol *s; // struct definition for TB_STRUCT
+	int nElements; // >0 array of given size, 0=array without size, <0 non array
+}Type;
+typedef struct{
+	Symbol **begin; // the beginning of the symbols, or NULL
+	Symbol **end; // the position after the last symbol
+	Symbol **after; // the position after the allocated space
+}Symbols;
+typedef struct _Symbol{
+	const char *name; // a reference to the name stored in a token
+	int cls; // CLS_*
+	int mem; // MEM_*
+	Type type;
+	int depth; // 0-global, 1-in function, 2... - nested blocks in function
+	union{
+		Symbols args; // used only of functions
+		Symbols members; // used only for structs
+	};
+}Symbol;
+Symbols symbols;
+
+void initSymbols(Symbols *symbols){
+	symbols->begin = NULL;
+	symbols->end = NULL;
+	symbols->after = NULL;
+}
+
+Symbol *addSymbol(Symbols *symbols,const char *name,int cls){
+	Symbol *s;
+	if(symbols->end == symbols->after){ // create more room
+		int count = symbols->after - symbols->begin;
+		int n = count*2; // double the room
+		if(n == 0)
+			n = 1; // needed for the initial case
+		symbols->begin = (Symbol**) realloc(symbols->begin, n*sizeof(Symbol*));
+		if(symbols->begin == NULL)
+			err("not enough memory");
+		symbols->end = symbols->begin + count;
+		symbols->after = symbols->begin + n;
+	}
+	SAFEALLOC(s,Symbol);
+	*symbols->end++=s;
+	s->name = name;
+	s->cls = cls;
+	s->depth = crtDepth;
+	return s;
+}
+
 int unit();
 int declStruct();
 int declVar();
@@ -82,6 +138,9 @@ int exprPostfix();
 int exprPrimary();
 char inbuf[MAX];
 char *pch;
+
+										
+
 int getEnum(int v){
 	switch(v){
 		case 0:
@@ -892,13 +951,15 @@ int declVar(){
 	return 0;
 }
 
-int arrayDecl(){
+int arrayDecl(Type *ret){
 	printf("arrayDecl ->");
 	getEnum(crtTk->code); printf("\n");
 	Token *initTk = crtTk;
 
 	if(consume(LBRACKET)){
-		expr();
+		if(expr()){
+			ret->nElements = 0;
+		}
 		if(consume(RBRACKET)){
 			return 1;
 		}else{
@@ -910,17 +971,19 @@ int arrayDecl(){
 	return 0;
 }
 
-int typeName(){
+int typeName(Type *ret){
 	printf("typeName ->");
 	getEnum(crtTk->code); printf("\n");
 	Token *initTk = crtTk;
 
-	if(!typeBase()){
+	if(!typeBase(ret)){
 		tkerr(crtTk,"Lipseste typeBase");
 		crtTk = initTk;
 		return 0;
 	}
-	arrayDecl();
+	if(arrayDecl(ret)){}
+	else
+		ret->nElements = -1;
 
 	return 1;
 }
