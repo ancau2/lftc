@@ -13,6 +13,7 @@
 #include<inttypes.h>
 #define STACK_SIZE (32*1024)
 #define MAX 30000
+#define GLOBAL_SIZE (32*1024)
 typedef struct _Token{
     int code; // codul (numele)
     union{
@@ -28,6 +29,8 @@ int line = 1;
 char stack[STACK_SIZE];
 char *SP; // Stack Pointer
 char *stackAfter; // first byte after stack; used for stack limit tests
+char globals[GLOBAL_SIZE];
+int nGlobals;
 
 
 Token *lastToken, *tokens,*consumedTK,*crtTk;
@@ -114,7 +117,84 @@ typedef struct{
     int isCtVal; // if it is a constant value (int, real, char, char[])
     CtVal ctVal; // the constat value
 }RetVal;
-
+char * a[80]={"O_ADD_C",
+              " O_ADD_D",
+              " O_ADD_I",
+              " O_AND_A",
+              " O_AND_C",
+              " O_AND_D",
+              " O_AND_I",
+              " O_CALL",
+              " O_CALLEXT",
+              " O_CAST_C_D",
+              " O_CAST_C_I",
+              " O_CAST_D_C",
+              " O_CAST_D_I",
+              " O_LOAD",
+              " O_CAST_I_C",
+              " O_CAST_I_D",
+              " O_DIV_C",
+              " O_DIV_D",
+              " O_DIV_I",
+              " O_DROP",
+              " O_ENTER",
+              " O_EQ_D",
+              " O_EQ_A",
+              " O_EQ_C",
+              " O_EQ_I",
+              " O_GREATER_C",
+              " O_GREATER_D",
+              " O_GREATER_I",
+              " O_GREATEREQ_C",
+              " O_GREATEREQ_D",
+              " O_GREATEREQ_I",
+              " O_HALT",
+              " O_INSERT",
+              " O_JF_I",
+              " O_JF_A",
+              " O_JF_C",
+              " O_JF_D",
+              " O_JMP",
+              " O_JT_I",
+              " O_JT_D",
+              " O_JT_A",
+              " O_JT_C",
+              " O_LESS_C",
+              " O_LESS_D",
+              " O_LESS_I",
+              " O_LESSEQ_C",
+              " O_LESSEQ_D",
+              " O_LESSEQ_I",
+              " O_MUL_C",
+              " O_MUL_D",
+              " O_MUL_I",
+              " O_NEG_C",
+              " O_NEG_D",
+              " O_NEG_I",
+              " O_NOP",
+              " O_NOT_A",
+              "  O_NOT_C",
+              " O_NOT_D",
+              "  O_NOT_I",
+              " O_NOTEQ_A",
+              " O_NOTEQ_C",
+              " O_NOTEQ_D",
+              " O_NOTEQ_I",
+              " O_OFFSET",
+              " O_OR_A",
+              " O_OR_C",
+              " O_OR_D",
+              " O_OR_I",
+              " O_PUSHFPADDR",
+              " O_PUSHCT_A",
+              " O_PUSHCT_C",
+              " O_PUSHCT_D",
+              " O_PUSHCT_I",
+              " O_RET",
+              " O_STORE",
+              " O_SUB_C",
+              " O_SUB_D",
+              " O_SUB_I"};
 int crtDepth = 0;
 Symbol *crtFunc = NULL;
 Symbol *crtStruct = NULL;
@@ -141,6 +221,7 @@ typedef struct _Instr{
     struct _Instr *last,*next; // links to last, next instructions
 }Instr;
 Instr *instructions,*lastInstruction;
+Instr *crtLoopEnd;
 
 
 void initSymbols(Symbols *symbols){
@@ -240,6 +321,13 @@ void showSymbols(Symbols *symbols){
 
 }
 
+void showInstr(Instr *instr){
+   while(instr->next != NULL){
+       printf("%s\n",a[instr->opcode]);
+       instr = instr->next;
+   }
+}
+
 int unit();
 int declStruct();
 int declVar(Type *ret);
@@ -265,6 +353,18 @@ int exprPostfix(RetVal *rv);
 int exprPrimary(RetVal *rv);
 char inbuf[MAX];
 char *pch;
+int offset,sizeArgs;
+
+int typeFullSize(Type *type);
+int typeBaseSize(Type *type);
+int typeArgSize(Type *type);
+
+void *allocGlobal(int size){
+    void *p=globals+nGlobals;
+    if(nGlobals+size>GLOBAL_SIZE)err("insufficient globals space");
+    nGlobals+=size;
+    return p;
+}
 
 void addVar(Token *tkName,Type *t){
     Symbol *s;
@@ -287,6 +387,13 @@ void addVar(Token *tkName,Type *t){
         s->mem = MEM_GLOBAL;
     }
     s->type = *t;
+
+    if(crtStruct||crtFunc){
+        s->offset=offset;
+    }else{
+        s->addr=allocGlobal(typeFullSize(&s->type));
+    }
+    offset+=typeFullSize(&s->type);
 }
 
 Type createType(int typeBase,int nElements){
@@ -389,6 +496,186 @@ Type getArithType(Type *s1,Type *s2){
     return  aux;
 }
 
+Instr *createInstr(int opcode){
+    Instr *i;
+    SAFEALLOC(i,Instr)
+    i->opcode=opcode;
+    return i;
+}
+
+void insertInstrAfter(Instr *after,Instr *i){
+    i->next=after->next;
+    i->last=after;
+    after->next=i;
+    if(i->next==NULL)lastInstruction=i;
+}
+
+Instr *addInstr(int opcode){
+    Instr *i=createInstr(opcode);
+    i->next=NULL;
+    i->last=lastInstruction;
+    if(lastInstruction){
+        lastInstruction->next=i;
+    }else{
+        instructions=i;
+    }
+    lastInstruction=i;
+    return i;
+}
+
+void appendInstr(Instr *i){
+    // adauga instructiunea i la sfarsitul listei de instructiuni
+    i->last=lastInstruction;
+    if (lastInstruction!=NULL) {
+        lastInstruction->next = i;
+    } else {
+        instructions = i;
+    }
+    lastInstruction=i;
+    i->next=NULL;
+}
+
+Instr *addInstrAfter(Instr *after,int opcode){
+    Instr *i = createInstr(opcode);
+    insertInstrAfter(after,i);
+    return i;
+}
+
+Instr *addInstrA(int opcode,void *addr){// adauga o instructiune setandu-i si arg[0].addr
+    Instr *i = createInstr(opcode);
+    i->next = NULL;
+    i->last = lastInstruction;
+    i->args[0].addr = addr;
+    if(lastInstruction){
+        lastInstruction->next = i;
+    }
+    else{
+        instructions = i;
+    }
+    lastInstruction = i;
+    return i;
+}
+
+Instr *addInstrI(int opcode, long int val){
+    Instr *i = createInstr(opcode);
+    i->next = NULL;
+    i->last = lastInstruction;
+    i->args[0].i = val;
+    if(lastInstruction){
+        lastInstruction->next = i;
+    }
+    else{
+        instructions = i;
+    }
+    lastInstruction = i;
+    return i;
+}
+
+Instr *addInstrII(int opcode, long int val1, long int val2){
+    Instr *i = createInstr(opcode);
+    i->next = NULL;
+    i->last = lastInstruction;
+    i->args[0].i = val1;
+    i->args[1].i = val2;
+    if(lastInstruction){
+        lastInstruction->next = i;
+    }
+    else{
+        instructions = i;
+    }
+    lastInstruction = i;
+    return i;
+}
+
+
+void deleteInstructionsAfter(Instr *start) {//sterge toate instructiunile de dupa instructiunea „start”
+    Instr *tmp1, *tmp2;
+    tmp1 = start -> next;
+
+    while(tmp1 != NULL){
+        tmp2 = tmp1;
+        tmp1 = tmp1 -> next;
+        free(tmp2);
+    }
+    start->next = NULL;
+    lastInstruction = start;
+}
+
+Instr *getRVal(RetVal *rv){
+    if(rv->isLVal){
+        switch(rv->type.typeBase){
+            case TB_INT:
+            case TB_DOUBLE:
+            case TB_CHAR:
+            case TB_STRUCT:
+                addInstrI(O_LOAD,typeArgSize(&rv->type));
+                break;
+            default:
+                tkerr(crtTk,"unhandled type: %d",rv->type.typeBase);
+        }
+    }
+    return lastInstruction;
+}
+
+void addCastInstr(Instr *after, Type *actualType, Type *neededType){
+    if(actualType->nElements>=0||neededType->nElements>=0){
+        return;
+    }
+    switch(actualType->typeBase){
+        case TB_CHAR:{
+            switch(neededType->typeBase){
+                case TB_CHAR:break;
+                case TB_INT:addInstrAfter(after,O_CAST_C_I);break;
+                case TB_DOUBLE:addInstrAfter(after,O_CAST_C_D);break;
+            }
+            break;
+        }
+        case TB_INT:{
+            switch(neededType->typeBase){
+                case TB_CHAR:addInstrAfter(after,O_CAST_I_C);break;
+                case TB_INT:break;
+                case TB_DOUBLE:addInstrAfter(after,O_CAST_I_D);break;
+            }
+            break;
+        }
+        case TB_DOUBLE:{
+            switch(neededType->typeBase){
+                case TB_CHAR:addInstrAfter(after,O_CAST_D_C);break;
+                case TB_INT:addInstrAfter(after,O_CAST_D_I);break;
+                case TB_DOUBLE:break;
+            }
+            break;
+        }
+    }
+}
+
+Instr *createCondJmp(RetVal *rv){
+    if(rv->type.nElements>=0){	// arrays
+        return addInstr(O_JF_A);
+    }else{						// non-arrays
+        getRVal(rv);
+        switch(rv->type.typeBase){
+            case TB_CHAR:return addInstr(O_JF_C);
+            case TB_DOUBLE:return addInstr(O_JF_D);
+            case TB_INT:return addInstr(O_JF_I);
+            default:return NULL;
+        }
+    }
+}
+
+Symbol *requireSymbol(Symbols *symbols,const char *name){
+    Symbol **s = symbols->end-1;
+    while(s != symbols->begin-1){
+
+        if(strcmp((*s)->name,name) == 0){
+            return *s;
+        }
+        s = s-1;
+    }
+    err("Symbol not found");
+    return NULL;
+}
+
 Symbol *addExtFunc(const char *name,Type type,void *addr){
     Symbol *s = addSymbol(&symbols,name,CLS_EXTFUNC);
     s->type = type;
@@ -434,6 +721,7 @@ void* popa(){
     }
     return *(void**) SP;
 }
+
 
 void pushc(char c){
     if(SP + sizeof(char) > stackAfter){
@@ -649,7 +937,7 @@ int getNextToken(){
     int base = 10;
     while(1){
         ch=*pch;
-        //printf("#starea %d cu ~%c~(%d)\n",s,ch,ch);
+//        printf("#starea %d cu ~%c~(%d)\n",s,ch,ch);
         switch(s){
             case 0:
                 if((isdigit(ch))&&(ch=='0')){
@@ -1183,13 +1471,40 @@ void afisare(){
     }
 }
 
+int typeFullSize(Type *type){
+    return typeBaseSize(type)*(type->nElements>0?type->nElements:1);
+}
+
+int typeBaseSize(Type *type){
+    int size=0;
+    Symbol **is;
+    switch(type->typeBase){
+        case TB_INT:size=sizeof(long int);break;
+        case TB_DOUBLE:size=sizeof(double);break;
+        case TB_CHAR:size=sizeof(char);break;
+        case TB_STRUCT:
+            for(is = type->s->members.begin; is != type->s->members.end; is++){
+                size += typeFullSize(&(*is)->type);
+            }
+            break;
+        case TB_VOID:size=0;break;
+        default:err("invalid typeBase: %d",type->typeBase);
+    }
+    return size;
+}
+
+int typeArgSize(Type *type){
+    if(type->nElements>=0)return sizeof(void*);
+    return typeBaseSize(type);
+}
+
 int consume(int code){
     if(crtTk->code == code){
-//         printf("consume ->");
-//         if(getEnum(crtTk->code) == 5){
-//         	printf("  %s",crtTk->text);
-//         }
-//         printf("\n");
+         printf("consume ->");
+         if(getEnum(crtTk->code) == 5){
+         	printf("  %s",crtTk->text);
+         }
+         printf("\n");
         consumedTK = crtTk;
         crtTk = crtTk->next;
         return 1;
@@ -1198,15 +1513,17 @@ int consume(int code){
 }
 
 int declStruct(){
-//     printf("declStruct ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("declStruct ->");
+     getEnum(crtTk->code); printf("\n");
 
     Token *initTk = crtTk;
+    Instr *startLastInstr = lastInstruction;
 
     if(consume(STRUCT)){
         if(consume(ID)){
             Token *tkName = consumedTK;
             if(consume(LACC)){
+                offset = 0;
                 if(findSymbol(&symbols,tkName->text))
                     tkerr(crtTk,"symbol redefinition: %s",tkName->text);
                 crtStruct = addSymbol(&symbols,tkName->text,CLS_STRUCT);
@@ -1231,14 +1548,16 @@ int declStruct(){
             tkerr(crtTk,"Lipseste definitia ID");
         }
     }
+    deleteInstructionsAfter(startLastInstr);
     crtTk = initTk;
     return 0;
 }
 
 int typeBase(Type *ret){
-//    printf("typeBase ->");
-//    getEnum(crtTk->code); printf("\n");
+    printf("typeBase ->");
+    getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
+    Instr *startLastInstr = lastInstruction;
 
     if(consume(INT)){
         ret->typeBase = TB_INT;
@@ -1270,17 +1589,19 @@ int typeBase(Type *ret){
             tkerr(crtTk,"Lipseste ID -> typeBase");
     }
 
+    deleteInstructionsAfter(startLastInstr);
     crtTk = initTk;
     return 0;
 }
 
 int declVar(Type *ret){
-//     printf("declVar ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("declVar ->");
+     getEnum(crtTk->code); printf("\n");
 
     Token *initTk = crtTk;
     Type t;
     Token *tkName;
+    Instr *startLastInstr = lastInstruction;
 
     if(typeBase(&t)){
         if(consume(ID)){
@@ -1310,22 +1631,27 @@ int declVar(Type *ret){
         }
     }
 
+    deleteInstructionsAfter(startLastInstr);
     crtTk = initTk;
     return 0;
 }
 
 int arrayDecl(Type *ret){
-//    printf("arrayDecl ->");
-//    getEnum(crtTk->code); printf("\n");
+    printf("arrayDecl ->");
+    getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
     RetVal rv;
+    Instr *startLastInstr = lastInstruction;
+    Instr *instrBeforeExpr;
 
     if(consume(LBRACKET)){
+        instrBeforeExpr = lastInstruction;
         if(expr(&rv)){
             ret->nElements = 0; // for now do not compute the real size
 
             if(!rv.isCtVal)tkerr(crtTk,"the array size is not a constant");
             if(rv.type.typeBase!=TB_INT)tkerr(crtTk,"the array size is not an integer");
+            deleteInstructionsAfter(instrBeforeExpr);
             ret->nElements=rv.ctVal.i;
         }
         else{
@@ -1338,18 +1664,21 @@ int arrayDecl(Type *ret){
         }
     }
 
+    deleteInstructionsAfter(startLastInstr);
     crtTk = initTk;
     return 0;
 }
 
 int typeName(Type *ret){
-//     printf("typeName ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("typeName ->");
+     getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
+    Instr *startInstr = lastInstruction;
 
     if(!typeBase(ret)){
         tkerr(crtTk,"Lipseste typeBase");
         crtTk = initTk;
+        deleteInstructionsAfter(startInstr);
         return 0;
     }
 
@@ -1361,14 +1690,19 @@ int typeName(Type *ret){
 }
 
 int unit(){
-//     printf("unit ->");
-//     getEnum(crtTk->code); printf("\n");
+    printf("unit ->");
+    getEnum(crtTk->code); printf("\n");
+    Instr *labelMain = addInstr(O_CALL);
+    addInstr(O_HALT);
 
     while(true){
         Type t;
         if(declStruct() || declFunc() || declVar(&t)) {}
         else break;
     }
+
+    labelMain->args[0].addr=requireSymbol(&symbols,"main")->addr;
+
     if(consume(END)) {
         return 1;
     }
@@ -1380,11 +1714,14 @@ int unit(){
 }
 
 int declFuncAux(Type t){
-//     printf("declFuncAux ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("declFuncAux ->");
+     getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
+    Symbol **ps;
+    Instr *startLastInstr = lastInstruction;
 
     if(consume(ID)){
+        sizeArgs = offset = 0;
         Token *tkName = consumedTK;
         if(consume(LPAR)){
             if(findSymbol(&symbols,tkName->text))
@@ -1405,8 +1742,20 @@ int declFuncAux(Type t){
             }
             if(consume(RPAR)){
                 crtDepth--;
+                crtFunc->addr = addInstr(O_ENTER);
+                sizeArgs = offset;
+                for (ps = symbols.begin; ps != symbols.end; ++ps){
+                    if((*ps)->mem == MEM_ARG){
+                        (*ps)->offset -= sizeArgs + 2 * sizeof(void*);
+                    }
+                }
+                offset = 0;
                 if(stmCompound()){
                     deleteSymbolsAfter(&symbols,crtFunc);
+                    ((Instr*)crtFunc->addr)->args[0].i=offset;  // setup the ENTER argument
+                    if(crtFunc->type.typeBase==TB_VOID){
+                        addInstrII(O_RET,sizeArgs,0);
+                    }
                     crtFunc = NULL;
                     return 1;
                 }else{
@@ -1418,16 +1767,18 @@ int declFuncAux(Type t){
         }
     }
 
+    deleteInstructionsAfter(startLastInstr);
     crtTk = initTk;
     return 0;
 }
 
 int declFunc(){
-//     printf("declFunc ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("declFunc ->");
+     getEnum(crtTk->code); printf("\n");
 
     Token *initTk = crtTk;
     Type t;
+    Instr *startLastInstr = lastInstruction;
 
     if(typeBase(&t)){
         if(consume(MUL))
@@ -1445,15 +1796,17 @@ int declFunc(){
     }
 
     crtTk = initTk;
+    deleteInstructionsAfter(startLastInstr);
     return 0;
 }
 
 int funcArg(){
-//     printf("funcArg ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("funcArg ->");
+     getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
     Type t;
     Token *tkName;
+    Instr *startLastInstr = lastInstruction;
 
     if(typeBase(&t)){
         if(consume(ID)){
@@ -1466,6 +1819,8 @@ int funcArg(){
             s = addSymbol(&crtFunc->args,tkName->text,CLS_VAR);
             s->mem = MEM_ARG;
             s->type = t;
+            s->offset = offset;
+            offset+=typeArgSize(&s->type);
             return 1;
         }else{
             tkerr(crtTk,"Lipseste ID -> funcArg");
@@ -1473,14 +1828,16 @@ int funcArg(){
     }
 
     crtTk = initTk;
+    deleteInstructionsAfter(startLastInstr);
     return 0 ;
 }
 
 int stmCompound(){
-//     printf("stmCompound ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("stmCompound ->");
+     getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
     Symbol *start = symbols.end[-1];
+    Instr *startLastInstr = lastInstruction;
 
     if(consume(LACC)){
         crtDepth++;
@@ -1499,139 +1856,283 @@ int stmCompound(){
     }
 
     crtTk = initTk;
+    deleteInstructionsAfter(startLastInstr);
     return 0;
 }
 
-int stm(){
-//     printf("stm ->");
-//     getEnum(crtTk->code); printf("\n");
-    Token *initTk = crtTk;
-    RetVal rv,rv1,rv2,rv3;
+int stm(void){
+    printf("#stm @ ");
+    getEnum(crtTk->code);printf("\n");
 
-    if(stmCompound())
+    Instr *i,*i1,*i2,*i3,*i4,*is,*ib3,*ibs;
+
+    Token *startTk = crtTk;
+    RetVal rv, rv1, rv2, rv3;
+    Instr *startLastInstr = lastInstruction;
+
+    if(stmCompound()){
         return 1;
-
-    if(consume(IF)){
+    }
+    else if(consume(IF)){
         if(consume(LPAR)){
             if(expr(&rv)){
                 if(rv.type.typeBase==TB_STRUCT){
                     tkerr(crtTk,"a structure cannot be logically tested");
                 }
                 if(consume(RPAR)){
+                    i1 = createCondJmp(&rv);
                     if(stm()){
                         if(consume(ELSE)){
-                            if(stm()){}
+                            i2 = addInstr(O_JMP);
+                            if(stm()){
+                                i1->args[0].addr = i2->next;
+                                i1 = i2;
+                                return 1;
+                            }
+                            else{
+                                tkerr(crtTk, "invalid stm");
+                            }
                         }
+                        i1->args[0].addr = addInstr(O_NOP);
                         return 1;
-                    }else tkerr(crtTk,"Lipseste stm");
-                }else tkerr(crtTk,"Lipseste )");
-            }else tkerr(crtTk,"Lipseste expr");
-        }else tkerr(crtTk,"Lipseste (");
+                    }
+                    else{
+                        tkerr(crtTk, "invalid stm");
+                    }
+                }
+                else{
+                    tkerr(crtTk, "Lipseste )");
+                }
+            }
+            else{
+                tkerr(crtTk, "invalid expr");
+            }
+        }
+        else{
+            tkerr(crtTk, "Lipseste (");
+        }
     }
+    else if(consume(WHILE)){
+        Instr *oldLoopEnd = crtLoopEnd;
+        crtLoopEnd = createInstr(O_NOP);
+        i1 = lastInstruction;
 
-    if(consume(WHILE)){
         if(consume(LPAR)){
             if(expr(&rv)){
                 if(rv.type.typeBase==TB_STRUCT){
                     tkerr(crtTk,"a structure cannot be logically tested");
                 }
                 if(consume(RPAR)){
+                    i2 = createCondJmp(&rv);
                     if(stm()){
+                        addInstrA(O_JMP,i1->next);
+                        appendInstr(crtLoopEnd);
+                        i2->args[0].addr=crtLoopEnd;
+                        crtLoopEnd=oldLoopEnd;
                         return 1;
-                    }else tkerr(crtTk,"Lipseste stm");
-                }else tkerr(crtTk,"Lipseste )");
-            }else tkerr(crtTk,"Lipseste expr");
-        } else tkerr(crtTk,"Lipseste (");
+                    }
+                    else{
+                        tkerr(crtTk, "invalid stm");
+                    }
+                }
+                else{
+                    tkerr(crtTk, "Lipseste )");
+                }
+            }
+            else{
+                tkerr(crtTk, "invalid expr");
+            }
+        }
+        else{
+            tkerr(crtTk, "Lipseste (");
+        }
     }
+    else if(consume(FOR)){
+        Instr *oldLoopEnd = crtLoopEnd;
+        crtLoopEnd = createInstr(O_NOP);
 
-    if(consume(FOR)){
         if(consume(LPAR)){
             expr(&rv1);
+
+            if(typeArgSize(&rv1.type))
+                addInstrI(O_DROP,typeArgSize(&rv1.type));
+
             if(consume(SEMICOLON)){
+                i2 = lastInstruction;
                 if(expr(&rv2)){
-                    if(rv2.type.typeBase == TB_STRUCT){
+                    i4 = createCondJmp(&rv2);
+                    if(rv2.type.typeBase==TB_STRUCT){
                         tkerr(crtTk,"a structure cannot be logically tested");
                     }
                 }
+                else{
+                    i4 = NULL;
+                }
                 if(consume(SEMICOLON)){
-                    expr(&rv3);
+                    ib3 = lastInstruction;
+                    if(expr(&rv3)){
+                        if(typeArgSize(&rv3.type)){
+                            addInstrI(O_DROP,typeArgSize(&rv3.type));
+                        }
+                    }
                     if(consume(RPAR)){
+                        ibs = lastInstruction;
                         if(stm()){
+
+                            if(ib3!=ibs){
+                                i3=ib3->next;
+                                is=ibs->next;
+                                ib3->next=is;
+                                is->last=ib3;
+                                lastInstruction->next=i3;
+                                i3->last=lastInstruction;
+                                ibs->next=NULL;
+                                lastInstruction=ibs;
+                            }
+                            addInstrA(O_JMP,i2->next);
+                            appendInstr(crtLoopEnd);
+                            if(i4){
+                                i4->args[0].addr=crtLoopEnd;
+                            }
+                            crtLoopEnd=oldLoopEnd;
+
                             return 1;
-                        }else tkerr(crtTk,"Lipseste stm");
-                    }else tkerr(crtTk,"Lipseste )");
-                }else tkerr(crtTk,"Lipseste ; -> stm 1");
-            }else tkerr(crtTk,"Lipseste ; -> stm 2");
-        }else tkerr(crtTk,"Lipseste ( -> for");
+                        }
+                        else{
+                            tkerr(crtTk, "stm invalid");
+                        }
+                    }
+                    else{
+                        tkerr(crtTk, "lipseste )");
+                    }
+                }
+                else{
+                    tkerr(crtTk, "lipseste '");
+                }
+            }
+            else{
+                tkerr(crtTk, "lipseste ;");
+            }
+        }
+        else{
+            tkerr(crtTk, "lipseste (");
+        }
     }
-
-    if(consume(BREAK)){
+    else if (consume(BREAK)){
         if(consume(SEMICOLON)){
+            if(!crtLoopEnd)tkerr(crtTk,"break fara for sau while");
+            addInstrA(O_JMP,crtLoopEnd);
             return 1;
-        }else tkerr(crtTk,"Lipseste ; -> stm 3");
+        }
+        else{
+            tkerr(crtTk, "lipseste ;");
+        }
     }
-
-    if(consume(RETURN)){
+    else if(consume(RETURN)){
         if(expr(&rv)){
-            if(crtFunc->type.typeBase == TB_VOID){
-                tkerr(crtTk,"a void function cannot return a value");
+            i=getRVal(&rv);
+            addCastInstr(i,&rv.type,&crtFunc->type);
+
+            if(crtFunc->type.typeBase==TB_VOID){
+                tkerr(crtTk,"o functie de tip void nu poate returna valoare");
             }
             cast(&crtFunc->type,&rv.type);
         }
         if(consume(SEMICOLON)){
-            return 1;
-        }else tkerr(crtTk,"Lipseste ; -> stm 4");
-    }
+            if(crtFunc->type.typeBase==TB_VOID){
+                addInstrII(O_RET,sizeArgs,0);
+            }else{
+                addInstrII(O_RET,sizeArgs,typeArgSize(&crtFunc->type));
+            }
 
-    if(expr(&rv)){
-        if(consume(SEMICOLON)){
             return 1;
-        }else tkerr(crtTk,"Lipseste ; -> stm 5");
-    }else{
+        }else tkerr(crtTk,"lipseste ;");
+    }
+    else if (expr(&rv1)){
+        if(typeArgSize(&rv1.type))addInstrI(O_DROP,typeArgSize(&rv1.type));
+
+        // dupa expr trebuie sa fie neaparat semicolon
         if(consume(SEMICOLON)){
             return 1;
         }
+        else{
+            tkerr(crtTk, "lipseste ;");
+        }
+    }
+    else if(consume(SEMICOLON)){
+        // poate sa lipseasca expr
+        if(typeArgSize(&rv1.type))addInstrI(O_DROP,typeArgSize(&rv1.type));
+
+        return 1;
     }
 
-    crtTk = initTk;
+    crtTk = startTk;
+    deleteInstructionsAfter(startLastInstr);
     return 0;
 }
 
 int exprOrAux(RetVal *rv){
-//     printf("exprOrAux ->");
-//     getEnum(crtTk->code); printf("\n");
-    Token *initTk = crtTk;
+     printf("exprOrAux ->");
+     getEnum(crtTk->code); printf("\n");
+    Token *startTk = crtTk;
     RetVal rve;
+    Instr *startLastInstr = lastInstruction;
+
+    Instr *i1, *i2;
+    Type t, t1, t2;
 
     if(consume(OR)){
+        i1=rv->type.nElements<0?getRVal(rv):lastInstruction;
+        t1=rv->type;
+
         if(exprAnd(&rve)){
-            if(rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT){
+            if(rv->type.typeBase==TB_STRUCT||rve.type.typeBase==TB_STRUCT){
                 tkerr(crtTk,"a structure cannot be logically tested");
             }
-            rv->type = createType(TB_INT,-1);
-            rv->isCtVal = rv->isLVal=0;
+
+            if(rv->type.nElements>=0){      // vectors
+                addInstr(O_OR_A);
+            }else{  // non-vectors
+                i2=getRVal(&rve);t2=rve.type;
+                t=getArithType(&t1,&t2);
+                addCastInstr(i1,&t1,&t);
+                addCastInstr(i2,&t2,&t);
+                switch(t.typeBase){
+                    case TB_INT:addInstr(O_OR_I);break;
+                    case TB_DOUBLE:addInstr(O_OR_D);break;
+                    case TB_CHAR:addInstr(O_OR_C);break;
+                }
+            }
+
+            rv->type=createType(TB_INT,-1);
+            rv->isCtVal=rv->isLVal=0;
+
             if(exprOrAux(rv)){
                 return 1;
-            }else{
-                tkerr(crtTk,"Declarare incorecta OR");
             }
-        }else{
-            tkerr(crtTk,"Lipseste exprAnd");
+            else{
+                tkerr(crtTk, "invalid exprOrPrim in exprOrPrim");
+            }
+        }
+        else{
+            tkerr(crtTk, "invalid exprAnd in exprOrPrim");
         }
     }
 
-    crtTk = initTk;
+    crtTk = startTk;
+    deleteInstructionsAfter(startLastInstr);
     return 1;
 }
 
 int exprOr(RetVal *rv){
-//     printf("exprOr ->");
-//     if(getEnum(crtTk->code)==5){
-//     	printf("%s\n",crtTk->text );
-//     }
-//     printf("\n");
+     printf("exprOr ->");
+     if(getEnum(crtTk->code)==5){
+     	printf("%s\n",crtTk->text );
+     }
+     printf("\n");
 
     Token *initTk = crtTk;
+    Instr *startLastInstr = lastInstruction;
 
     if(exprAnd(rv)){
         if(exprOrAux(rv)){
@@ -1642,40 +2143,68 @@ int exprOr(RetVal *rv){
     }
 
     crtTk = initTk;
+    deleteInstructionsAfter(startLastInstr);
     return 0;
 }
 
 int exprAndAux(RetVal *rv){
-//     printf("exprAndAux ->");
-//     getEnum(crtTk->code); printf("\n");
-    Token *initTk = crtTk;
+     printf("exprAndAux ->");
+     getEnum(crtTk->code); printf("\n");
+    Token *startTk = crtTk;
     RetVal rve;
+    Instr *startLastInstr = lastInstruction;
+
+    Instr *i1,*i2;
+    Type t,t1,t2;
 
     if(consume(AND)){
+        i1=rv->type.nElements<0?getRVal(rv):lastInstruction;
+        t1=rv->type;
+
         if(exprEq(&rve)){
-            if(rv->type.typeBase == TB_STRUCT || rve.type.typeBase == TB_STRUCT){
+            if(rv->type.typeBase==TB_STRUCT||rve.type.typeBase==TB_STRUCT){
                 tkerr(crtTk,"a structure cannot be logically tested");
             }
+
+            if(rv->type.nElements>=0){      // vectors
+                addInstr(O_AND_A);
+            }else{  // non-vectors
+                i2=getRVal(&rve);t2=rve.type;
+                t=getArithType(&t1,&t2);
+                addCastInstr(i1,&t1,&t);
+                addCastInstr(i2,&t2,&t);
+                switch(t.typeBase){
+                    case TB_INT:addInstr(O_AND_I);break;
+                    case TB_DOUBLE:addInstr(O_AND_D);break;
+                    case TB_CHAR:addInstr(O_AND_C);break;
+                }
+            }
+
             rv->type=createType(TB_INT,-1);
             rv->isCtVal=rv->isLVal=0;
+
             if(exprAndAux(rv)){
                 return 1;
-            }else{
-                tkerr(crtTk,"Declarare incorecta AND");
             }
-        }else {
-            tkerr(crtTk,"Lipseste exprEq");
+            else{
+                tkerr(crtTk, "invalid exprAndPrim in exprAndPrim");
+            }
+        }
+        else{
+            tkerr(crtTk, "invalid exprEq in exprAndPrim");
         }
     }
 
-    crtTk = initTk;
+    crtTk = startTk;
+    deleteInstructionsAfter(startLastInstr);
     return 1;
 }
 
 int exprAnd(RetVal *rv){
-//     printf("exprAnd ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("exprAnd ->");
+     getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
+    Instr *startInstr = lastInstruction;
 
     if(exprEq(rv)){
         if(exprAndAux(rv)){
@@ -1686,41 +2215,93 @@ int exprAnd(RetVal *rv){
     }
 
     crtTk = initTk;
+    deleteInstructionsAfter(startInstr);
     return 0;
 }
 
 int exprEqAux(RetVal *rv){
-//     printf("exprEqAux ->");
-//     getEnum(crtTk->code); printf("\n");
-    Token *initTk = crtTk;
+     printf("exprEqAux ->");
+     getEnum(crtTk->code); printf("\n");
+    Token *startTk = crtTk;
     RetVal rve;
-    int tkop;
+    Instr *startLastInstr = lastInstruction;
 
-    if(consume(EQUAL) || consume(NOTEQ)){
+    Instr *i1, *i2;
+    Type t, t1, t2;
+
+    int tkop = -1;
+    /* -1 => a returnat false, 1 => EQUAL, 2 => NOTEQ */
+
+    if(consume(EQUAL)){
+        tkop = 1;
+    }
+    else if (consume(NOTEQ)){
+        tkop = 2;
+    }
+
+    if(tkop == 1 || tkop == 2){
+        i1=rv->type.nElements<0?getRVal(rv):lastInstruction;
+        t1=rv->type;
+
         if(exprRel(&rve)){
+
             if(rv->type.typeBase==TB_STRUCT||rve.type.typeBase==TB_STRUCT){
                 tkerr(crtTk,"a structure cannot be compared");
             }
+
+            if(rv->type.nElements>=0){      // vectors
+                if(tkop == 1){	// EQUAL
+                    addInstr(O_EQ_A);
+                }
+                else{	//NOTEQ
+                    addInstr(O_NOTEQ_A);
+                }
+                // addInstr(tkop->code==EQUAL?O_EQ_A:O_NOTEQ_A);
+            }else{  // non-vectors
+                i2=getRVal(&rve);t2=rve.type;
+                t=getArithType(&t1,&t2);
+                addCastInstr(i1,&t1,&t);
+                addCastInstr(i2,&t2,&t);
+                if(tkop == 1){	//EQUAL
+                    switch(t.typeBase){
+                        case TB_INT:addInstr(O_EQ_I);break;
+                        case TB_DOUBLE:addInstr(O_EQ_D);break;
+                        case TB_CHAR:addInstr(O_EQ_C);break;
+                    }
+                }else{
+                    switch(t.typeBase){
+                        case TB_INT:addInstr(O_NOTEQ_I);break;
+                        case TB_DOUBLE:addInstr(O_NOTEQ_D);break;
+                        case TB_CHAR:addInstr(O_NOTEQ_C);break;
+                    }
+                }
+            }
+
             rv->type=createType(TB_INT,-1);
             rv->isCtVal=rv->isLVal=0;
+
             if(exprEqAux(rv)){
                 return 1;
-            } else{
-                tkerr(crtTk,"Declarare incorecta EQ");
             }
-        } else{
-            tkerr(crtTk,"Lipseste exprRel()");
+            else{
+                tkerr(crtTk, "invalid exprEqPrim in exprEqPrim");
+            }
+        }
+        else{
+            tkerr(crtTk, "invalid exprRel in exprEqPrim");
         }
     }
 
-    crtTk = initTk;
+    crtTk = startTk;
+    deleteInstructionsAfter(startLastInstr);
     return 1;
 }
 
 int exprEq(RetVal *rv){
-//     printf("exprEq ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("exprEq ->");
+     getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
+    Instr *startInstr = lastInstruction;
 
     if(exprRel(rv)){
         if(exprEqAux(rv)){
@@ -1731,14 +2312,16 @@ int exprEq(RetVal *rv){
     }
 
     crtTk = initTk;
+    deleteInstructionsAfter(startInstr);
     return 0;
 }
 
 int exprAssign(RetVal *rv){
-//     printf("exprAssign ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("exprAssign ->");
+     getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
     RetVal rve;
+    Instr *startLastInstr = lastInstruction;
 
     if(exprUnary(rv)){
         if(consume(ASSIGN)){
@@ -1750,8 +2333,11 @@ int exprAssign(RetVal *rv){
                     tkerr(crtTk,"the arrays cannot be assigned");
                 }
                 cast(&rv->type,&rve.type);
+                Instr *i = getRVal(&rve);
+                addCastInstr(i, &rve.type, &rv->type);
                 rv->isCtVal=rv->isLVal=0;
-
+                addInstrII(O_INSERT, sizeof(void*)+typeArgSize(&rv->type),typeArgSize(&rv->type));
+                addInstrI(O_STORE, typeArgSize(&rv->type));
                 return 1;
             }else{
                 tkerr(crtTk,"Lipseste exprAssign");
@@ -1759,48 +2345,120 @@ int exprAssign(RetVal *rv){
         }
         crtTk = initTk;
     }
-
     if(exprOr(rv))
         return 1;
 
+
+    //aici
     crtTk = initTk;
+    deleteInstructionsAfter(startLastInstr);
     return 0;
 }
 
 int exprRelAux(RetVal *rv){
-//     printf("exprRelAux ->");
-//     getEnum(crtTk->code); printf("\n");
-    Token *initTk = crtTk;
+     printf("exprRelAux ->");
+     getEnum(crtTk->code); printf("\n");
+    Token *startTk = crtTk;
     RetVal rve;
+    Instr *startLastInstr = lastInstruction;
 
-    if(consume(LESS) || consume(LESSEQ) || consume(GREATER) || consume(GREATEREQ)){
+    Instr *i1, *i2;
+    Type t, t1, t2;
+
+    int tkop = -1;
+    // tkop = -1 => returneaza false
+    // tkop = 1 => LESS
+    // tkop = 2 => LESSEQ
+    // tkop = 3 => GREATER
+    // tkop = 4 =? GREATEREQ
+
+    if(consume(LESS)){
+        tkop = 1;
+    }
+    else if(consume(LESSEQ)){
+        tkop = 2;
+    }
+    else if(consume(GREATER)){
+        tkop = 3;
+    }
+    else if(consume(GREATEREQ)){
+        tkop = 4;
+    }
+
+    if(tkop != -1){
+        i1=getRVal(rv);
+        t1=rv->type;
+
         if(exprAdd(&rve)){
+
             if(rv->type.nElements>-1||rve.type.nElements>-1){
                 tkerr(crtTk,"an array cannot be compared");
             }
             if(rv->type.typeBase==TB_STRUCT||rve.type.typeBase==TB_STRUCT){
                 tkerr(crtTk,"a structure cannot be compared");
             }
+
+            i2=getRVal(&rve);t2=rve.type;
+            t=getArithType(&t1,&t2);
+            addCastInstr(i1,&t1,&t);
+            addCastInstr(i2,&t2,&t);
+            switch(tkop){
+                case 1:
+                    switch(t.typeBase){
+                        case TB_INT:addInstr(O_LESS_I);break;
+                        case TB_DOUBLE:addInstr(O_LESS_D);break;
+                        case TB_CHAR:addInstr(O_LESS_C);break;
+                    }
+                    break;
+                case 2:
+                    switch(t.typeBase){
+                        case TB_INT:addInstr(O_LESSEQ_I);break;
+                        case TB_DOUBLE:addInstr(O_LESSEQ_D);break;
+                        case TB_CHAR:addInstr(O_LESSEQ_C);break;
+                    }
+                    break;
+                case 3:
+                    switch(t.typeBase){
+                        case TB_INT:addInstr(O_GREATER_I);break;
+                        case TB_DOUBLE:addInstr(O_GREATER_D);break;
+                        case TB_CHAR:addInstr(O_GREATER_C);break;
+                    }
+                    break;
+                case 4:
+                    switch(t.typeBase){
+                        case TB_INT:addInstr(O_GREATEREQ_I);break;
+                        case TB_DOUBLE:addInstr(O_GREATEREQ_D);break;
+                        case TB_CHAR:addInstr(O_GREATEREQ_C);break;
+                    }
+                    break;
+            }
+
             rv->type=createType(TB_INT,-1);
             rv->isCtVal=rv->isLVal=0;
+
             if(exprRelAux(rv)){
                 return 1;
-            }else{
-                tkerr(crtTk,"Declarare incorecta exprRel");
             }
-        }else{
-            tkerr(crtTk,"Lipseste exprAnd");
+            else{
+                tkerr(crtTk, "invalid exprRelPrim in exprRelPrim");
+            }
+        }
+        else{
+            tkerr(crtTk, "invalid exprAdd in exprRelPrim");
         }
     }
 
-    crtTk = initTk;
+    crtTk = startTk;
+    deleteInstructionsAfter(startLastInstr);
     return 1;
+
 }
 
 int exprRel(RetVal *rv){
-//     printf("exprRel ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("exprRel ->");
+     getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
+    Instr *startInstr = lastInstruction;
 
     if(exprAdd(rv)){
         if(exprRelAux(rv)){
@@ -1811,17 +2469,38 @@ int exprRel(RetVal *rv){
     }
 
     crtTk = initTk;
+    deleteInstructionsAfter(startInstr);
     return 0;
 }
 
 int exprAddAux(RetVal *rv){
-//     printf("exprAddAux ->");
-//     getEnum(crtTk->code); printf("\n");
-    Token *initTk = crtTk;
+     printf("exprAddAux ->");
+     getEnum(crtTk->code); printf("\n");
+    Token *startTk = crtTk;
     RetVal rve;
+    Instr *startLastInstr = lastInstruction;
 
-    if(consume(ADD) || consume(SUB)){
+    Instr *i1, *i2;
+    Type t1, t2;
+
+    int tkop = -1;
+    // tkop = -1 => returneaza false
+    // tkop = 1 => SUB
+    // tkop = 2 => ADD
+
+    if(consume(SUB)){
+        tkop = 1;
+    }
+    else if(consume(ADD)){
+        tkop = 2;
+    }
+
+    if(tkop != -1){
+        i1=getRVal(rv);
+        t1=rv->type;
+
         if(exprMul(&rve)){
+
             if(rv->type.nElements>-1||rve.type.nElements>-1){
                 tkerr(crtTk,"an array cannot be added or subtracted");
             }
@@ -1829,25 +2508,48 @@ int exprAddAux(RetVal *rv){
                 tkerr(crtTk,"a structure cannot be added or subtracted");
             }
             rv->type=getArithType(&rv->type,&rve.type);
+
+            i2=getRVal(&rve);t2=rve.type;
+            addCastInstr(i1,&t1,&rv->type);
+            addCastInstr(i2,&t2,&rv->type);
+            if(tkop == 2){	// ADD
+                switch(rv->type.typeBase){
+                    case TB_INT:addInstr(O_ADD_I);break;
+                    case TB_DOUBLE:addInstr(O_ADD_D);break;
+                    case TB_CHAR:addInstr(O_ADD_C);break;
+                }
+            }else{			// SUB
+                switch(rv->type.typeBase){
+                    case TB_INT:addInstr(O_SUB_I);break;
+                    case TB_DOUBLE:addInstr(O_SUB_D);break;
+                    case TB_CHAR:addInstr(O_SUB_C);break;
+                }
+            }
+
             rv->isCtVal=rv->isLVal=0;
+
             if(exprAddAux(rv)){
                 return 1;
-            }else{
-                tkerr(crtTk,"Declarare incorecta exprAdd");
             }
-        }else{
-            tkerr(crtTk,"Lipseste exprMul");
+            else{
+                tkerr(crtTk, "invalid exprAddPrim in exprAddPrim");
+            }
+        }
+        else{
+            tkerr(crtTk, "invalid exprMul in exprAddPrim");
         }
     }
 
-    crtTk = initTk;
+    crtTk = startTk;
+    deleteInstructionsAfter(startLastInstr);
     return 1;
 }
 
 int exprAdd(RetVal *rv){
-//     printf("exprAdd ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("exprAdd ->");
+     getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
+    Instr *startInstr = lastInstruction;
 
     if(exprMul(rv)){
         if(exprAddAux(rv)){
@@ -1858,17 +2560,38 @@ int exprAdd(RetVal *rv){
     }
 
     crtTk = initTk;
+    deleteInstructionsAfter(startInstr);
     return 0;
 }
 
 int exprMulAux(RetVal *rv){
-//     printf("exprMulAux ->");
-//     getEnum(crtTk->code); printf("\n");
-    Token *initTk = crtTk;
+     printf("exprMulAux ->");
+     getEnum(crtTk->code); printf("\n");
+    Token *startTk = crtTk;
     RetVal rve;
+    Instr *startLastInstr = lastInstruction;
+
+    Instr *i1, *i2;
+    Type t1, t2;
+
+    int tkop = -1;
+    // tkop =  -1 => returneaza false
+    // tkop = 1 => MUL
+    // tkop = 2 => DIV
+
+    if(consume(MUL)){
+        tkop = 1;
+    }
+    else if(consume(DIV)){
+        tkop = 2;
+    }
 
     if(consume(MUL) || consume(DIV)){
+        i1=getRVal(rv);
+        t1=rv->type;
+
         if(exprCast(&rve)){
+
             if(rv->type.nElements>-1||rve.type.nElements>-1){
                 tkerr(crtTk,"an array cannot be multiplied or divided");
             }
@@ -1876,25 +2599,48 @@ int exprMulAux(RetVal *rv){
                 tkerr(crtTk,"a structure cannot be multiplied or divided");
             }
             rv->type=getArithType(&rv->type,&rve.type);
+
+            i2=getRVal(&rve);t2=rve.type;
+            addCastInstr(i1,&t1,&rv->type);
+            addCastInstr(i2,&t2,&rv->type);
+            if(tkop == 1){	// MUL
+                switch(rv->type.typeBase){
+                    case TB_INT:addInstr(O_MUL_I);break;
+                    case TB_DOUBLE:addInstr(O_MUL_D);break;
+                    case TB_CHAR:addInstr(O_MUL_C);break;
+                }
+            }else{			// DIV
+                switch(rv->type.typeBase){
+                    case TB_INT:addInstr(O_DIV_I);break;
+                    case TB_DOUBLE:addInstr(O_DIV_D);break;
+                    case TB_CHAR:addInstr(O_DIV_C);break;
+                }
+            }
+
             rv->isCtVal=rv->isLVal=0;
+
             if(exprMulAux(rv)){
                 return 1;
-            }else{
-                tkerr(crtTk,"Declarare incorecta exprMul");
             }
-        }else{
-            tkerr(crtTk,"Lipseste exprMul");
+            else{
+                tkerr(crtTk, "invalid exprMulPrim in exprMulPrim");
+            }
+        }
+        else{
+            tkerr(crtTk, "invalid exprCast in exprMulPrim");
         }
     }
 
-    crtTk = initTk;
+    crtTk = startTk;
+    deleteInstructionsAfter(startLastInstr);
     return 1;
 }
 
 int exprMul(RetVal *rv){
-//     printf("exprMul ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("exprMul ->");
+     getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
+    Instr *startInstr = lastInstruction;
 
     if(exprCast(rv)){
         if(exprMulAux(rv)){
@@ -1905,115 +2651,146 @@ int exprMul(RetVal *rv){
     }
 
     crtTk = initTk;
+    deleteInstructionsAfter(startInstr);
     return 0;
 }
 
 int exprCast(RetVal *rv){
-//     printf("exprCast ->");
-//     getEnum(crtTk->code); printf("\n");
-    Token *initTk = crtTk;
-    Type t;
+     printf("exprCast ->");
+     getEnum(crtTk->code); printf("\n");
+    Token *startTk = crtTk;
     RetVal rve;
+    Type t;
+    Instr *startLastInstr = lastInstruction;
 
     if(consume(LPAR)){
         if(typeName(&t)){
             if(consume(RPAR)){
                 if(exprCast(&rve)){
                     cast(&t,&rve.type);
+
+                    if(rv->type.nElements<0&&rv->type.typeBase!=TB_STRUCT){
+                        switch(rve.type.typeBase){
+                            case TB_CHAR:
+                                switch(t.typeBase){
+                                    case TB_INT:addInstr(O_CAST_C_I);break;
+                                    case TB_DOUBLE:addInstr(O_CAST_C_D);break;
+                                }
+                                break;
+                            case TB_DOUBLE:
+                                switch(t.typeBase){
+                                    case TB_CHAR:addInstr(O_CAST_D_C);break;
+                                    case TB_INT:addInstr(O_CAST_D_I);break;
+                                }
+                                break;
+                            case TB_INT:
+                                switch(t.typeBase){
+                                    case TB_CHAR:addInstr(O_CAST_I_C);break;
+                                    case TB_DOUBLE:addInstr(O_CAST_I_D);break;
+                                }
+                                break;
+                        }
+                    }
+
                     rv->type=t;
                     rv->isCtVal=rv->isLVal=0;
+
                     return 1;
-                }else{
-                    tkerr(crtTk,"Lipseste exprCast");
                 }
-            }else{
-                tkerr(crtTk,"Lipseste )");
+                else{
+                    tkerr(crtTk, "invalid exprCast");
+                }
             }
-        }else{
-            tkerr(crtTk,"Lipseste typeName");
+            else{
+                tkerr(crtTk, "Lipseste )");
+            }
+        }
+        else{
+            tkerr(crtTk, "invalid typeName");
         }
     }
-    crtTk = initTk;
-
-    if(exprUnary(rv))
+    else if(exprUnary(rv)){
         return 1;
+    }
 
-    crtTk = initTk;
+    crtTk = startTk;
+    deleteInstructionsAfter(startLastInstr);
     return 0;
 }
 
 int exprUnary(RetVal *rv){
-//     printf("exprUnary ->");
-//     getEnum(crtTk->code); printf("\n");
-    Token *initTk = crtTk;
+     printf("exprUnary ->");
+     getEnum(crtTk->code); printf("\n");
+    Token *startTk = crtTk;
+    Instr *startLastInstr = lastInstruction;
 
     if(consume(SUB)){
         if(exprUnary(rv)){
+
             if(rv->type.nElements>=0){
                 tkerr(crtTk,"unary '-' cannot be applied to an array");
             }
             if(rv->type.typeBase==TB_STRUCT){
                 tkerr(crtTk,"unary '-' cannot be applied to a struct");
             }
+
+            getRVal(rv);
+            switch(rv->type.typeBase){
+                case TB_CHAR:addInstr(O_NEG_C);break;
+                case TB_INT:addInstr(O_NEG_I);break;
+                case TB_DOUBLE:addInstr(O_NEG_D);break;
+            }
+
             return 1;
-        }else{
-            tkerr(crtTk,"Lipseste exprUnary");
         }
-    }else if(consume(NOT)){
+    }
+    else if(consume(NOT)){
         if(exprUnary(rv)){
 
             if(rv->type.typeBase==TB_STRUCT){
                 tkerr(crtTk,"'!' cannot be applied to a struct");
             }
+
+            if(rv->type.nElements<0){
+                getRVal(rv);
+                switch(rv->type.typeBase){
+                    case TB_CHAR:addInstr(O_NOT_C);break;
+                    case TB_INT:addInstr(O_NOT_I);break;
+                    case TB_DOUBLE:addInstr(O_NOT_D);break;
+                }
+            }else{
+                addInstr(O_NOT_A);
+            }
+
             rv->type=createType(TB_INT,-1);
 
-            return true;
+            return 1;
         }
         else{
-            tkerr(crtTk, "Lipseste exprUnary");
+            tkerr(crtTk, "invalid ExprUnary");
         }
     }
-
-    if(exprPostfix(rv))
+    else if(exprPostfix(rv)){
         return 1;
+    }
 
-    crtTk = initTk;
+    crtTk = startTk;
+    deleteInstructionsAfter(startLastInstr);
     return 0;
 }
 
 int exprPostfixAux(RetVal *rv){
-//     printf("exprPostfixAux ->");
-//     getEnum(crtTk->code);
-   // printf("\n");
-    Token *initTk = crtTk;
+     printf("exprPostfixAux ->");
+     getEnum(crtTk->code);
+    printf("\n");
+    Token *startTk = crtTk;
     RetVal rve;
     Token *tkName;
-
-    if(consume(DOT)){
-        if(consume(ID)){
-            tkName = consumedTK;
-
-            Symbol *sStruct=rv->type.s;
-            Symbol *sMember=findSymbol(&sStruct->members,tkName->text);
-            if(!sMember){
-                tkerr(crtTk,"struct %s does not have a member %s",sStruct->name,tkName->text);
-            }
-            rv->type=sMember->type;
-            rv->isLVal=1;
-            rv->isCtVal=0;
-
-            if(exprPostfixAux(rv)){
-                return 1;
-            }else{
-                tkerr(crtTk,"Declarare incorecta exprPostfix");
-            }
-        }else{
-            tkerr(crtTk,"Lipseste ID -> exprPostfixAux");
-        }
-    }
+    Instr *startLastInstr = lastInstruction;
 
     if(consume(LBRACKET)){
         if(expr(&rve)){
+
             if(rv->type.nElements<0){
                 tkerr(crtTk,"only an array can be indexed");
             }
@@ -2023,28 +2800,73 @@ int exprPostfixAux(RetVal *rv){
             rv->type.nElements=-1;
             rv->isLVal=1;
             rv->isCtVal=0;
+
             if(consume(RBRACKET)){
+                addCastInstr(lastInstruction,&rve.type,&typeInt);
+                getRVal(&rve);
+                if(typeBaseSize(&rv->type)!=1){
+                    addInstrI(O_PUSHCT_I,typeBaseSize(&rv->type));
+                    addInstr(O_MUL_I);
+                }
+                addInstr(O_OFFSET);
+
                 if(exprPostfixAux(rv)){
                     return 1;
-                }else{
-                    tkerr(crtTk,"Declarare incorecta exprPostfix");
                 }
-            }else{
-                tkerr(crtTk,"Lipseste } -> exprPostfix");
+                else{
+                    tkerr(crtTk, "invalid exprPostfixPrim in exprPostfixAux");
+                }
             }
-        }else{
-            tkerr(crtTk,"Lipseste expr");
+            else{
+                tkerr(crtTk, "Lipseste } in exprPostfixAux");
+            }
+        }
+        else{
+            tkerr(crtTk, "invalid expr in exprPostfixAux");
+        }
+    }
+    else if(consume(DOT)){
+        if(consume(ID)){
+
+            tkName = consumedTK;
+
+            Symbol *sStruct=rv->type.s;
+            Symbol *sMember=findSymbol(&sStruct->members,tkName->text);
+            if(!sMember){
+                tkerr(crtTk,"struct %s does not have a member %s",sStruct->name,tkName->text);
+            }
+
+            if(sMember->offset){
+                addInstrI(O_PUSHCT_I,sMember->offset);
+                addInstr(O_OFFSET);
+            }
+
+            rv->type=sMember->type;
+            rv->isLVal=1;
+            rv->isCtVal=0;
+
+            if(exprPostfixAux(rv)){
+                return 1;
+            }
+            else{
+                tkerr(crtTk, "invalid exprPostfixPrim in exprPostfixAux");
+            }
+        }
+        else{
+            tkerr(crtTk, "invalid ID in exprPostfixAux");
         }
     }
 
-    crtTk = initTk;
+    crtTk = startTk;
+    deleteInstructionsAfter(startLastInstr);
     return 1;
 }
 
 int exprPostfix(RetVal *rv){
-//     printf("exprPostfix ->");
-//     getEnum(crtTk->code); printf("\n");
+     printf("exprPostfix ->");
+     getEnum(crtTk->code); printf("\n");
     Token *initTk = crtTk;
+    Instr *startLastInstr = lastInstruction;
 
     if(exprPrimary(rv)){
         if(exprPostfixAux(rv)){
@@ -2055,15 +2877,19 @@ int exprPostfix(RetVal *rv){
     }
 
     crtTk = initTk;
+    deleteInstructionsAfter(startLastInstr);
     return 0;
 }
 
 int exprPrimary(RetVal *rv){
-//     printf("exprPrimary ->");
-//     getEnum(crtTk->code); printf("\n");
-    Token *initTk = crtTk;
-    RetVal arg;
+     printf("exprPrimary ->");
+     getEnum(crtTk->code); printf("\n");
+    Token *startTk = crtTk;
     Token *tkName;
+    RetVal arg;
+    Instr *startLastInstr = lastInstruction;
+
+    Instr *i;
 
     if(consume(ID)){
         tkName = consumedTK;
@@ -2075,107 +2901,164 @@ int exprPrimary(RetVal *rv){
         rv->type=s->type;
         rv->isCtVal=0;
         rv->isLVal=1;
+
         if(consume(LPAR)){
-            Symbol **crtDefArg = s->args.begin;
+
+            Symbol **crtDefArg=s->args.begin;
             if(s->cls!=CLS_FUNC&&s->cls!=CLS_EXTFUNC){
                 tkerr(crtTk,"call of the non-function %s",tkName->text);
             }
+
             if(expr(&arg)){
-                if(crtDefArg == s->args.end){
+
+                if(crtDefArg==s->args.end){
                     tkerr(crtTk,"too many arguments in call");
                 }
                 cast(&(*crtDefArg)->type,&arg.type);
+
+                if((*crtDefArg)->type.nElements<0){  //only arrays are passed by addr
+                    i=getRVal(&arg);
+                }else{
+                    i=lastInstruction;
+                }
+                addCastInstr(i,&arg.type,&(*crtDefArg)->type);
+
                 crtDefArg++;
-                while(consume(COMMA)){
-                    if(expr(&arg)){
-                        if(crtDefArg==s->args.end){
-                            tkerr(crtTk,"too many arguments in call");
+
+                while(true){
+                    if(consume(COMMA)){
+                        if(expr(&arg)){
+
+                            if(crtDefArg==s->args.end){
+                                tkerr(crtTk,"too many arguments in call");
+                            }
+                            cast(&(*crtDefArg)->type,&arg.type);
+
+                            if((*crtDefArg)->type.nElements<0){
+                                i=getRVal(&arg);
+                            }else{
+                                i=lastInstruction;
+                            }
+                            addCastInstr(i,&arg.type,&(*crtDefArg)->type);
+
+                            crtDefArg++;
                         }
-                        cast(&(*crtDefArg)->type,&arg.type);
-                        crtDefArg++;
+                        else{
+                            tkerr(crtTk, "invalid expr in exprPrimary");
+                        }
                     }
                     else
-                        tkerr(crtTk,"Lipseste expr dupa ,");
+                        break;
                 }
             }
-            if(consume(RPAR)) {
-                if(crtDefArg != s->args.end){
+            // ce incepe cu expr mai sus e optional
+            if(consume(RPAR)){
+
+                if(crtDefArg!=s->args.end){
                     tkerr(crtTk,"too few arguments in call");
                 }
                 rv->type=s->type;
                 rv->isCtVal=rv->isLVal=0;
+
+                i=addInstr(s->cls==CLS_FUNC?O_CALL:O_CALLEXT);
+                i->args[0].addr=s->addr;
+
+                if(s->depth){
+                    addInstrI(O_PUSHFPADDR,s->offset);
+                }else{
+                    addInstrA(O_PUSHCT_A,s->addr);
+                }
+
                 return 1;
             }
-            else
-                tkerr(crtTk,"Lipseste ) in apel de func");
-        }else{
-            if(s->cls == CLS_FUNC || s->cls == CLS_EXTFUNC){
+            else{
+                tkerr(crtTk, "Lipseste )");
+            }
+        }
+        else{
+            if(s->cls==CLS_FUNC||s->cls==CLS_EXTFUNC){
                 tkerr(crtTk,"missing call for function %s",tkName->text);
             }
         }
         return 1;
     }
-
-    if(consume(CT_INT)){
+    else if(consume(CT_INT)){
         Token *tki = consumedTK;
 
         rv->type=createType(TB_INT,-1);
         rv->ctVal.i=tki->i;
         rv->isCtVal=1;rv->isLVal=0;
+
+        addInstrI(O_PUSHCT_I,tki->i);
+
         return 1;
     }
-
-    if(consume(CT_REAL)){
+    else if(consume(CT_REAL)){
         Token *tkr = consumedTK;
 
         rv->type=createType(TB_DOUBLE,-1);
         rv->ctVal.d=tkr->r;
         rv->isCtVal=1;rv->isLVal=0;
+
+        i=addInstr(O_PUSHCT_D);i->args[0].d=tkr->r;
+
         return 1;
     }
-
-    if(consume(CT_STRING)){
-
-        Token *tks = consumedTK;
-
-        rv->type=createType(TB_CHAR,0);
-        rv->ctVal.str=tks->text;
-        rv->isCtVal=1;rv->isLVal=0;
-        return 1;
-    }
-
-    if(consume(CT_CHAR)){
+    else if(consume(CT_CHAR)){
         Token *tkc = consumedTK;
 
         rv->type=createType(TB_CHAR,-1);
         rv->ctVal.i=tkc->i;
         rv->isCtVal=1;rv->isLVal=0;
+
+        addInstrI(O_PUSHCT_C,tkc->i);
+
         return 1;
     }
+    else if(consume(CT_STRING)){
+        Token *tks = consumedTK;
 
-    if(consume(LPAR)){
+        rv->type=createType(TB_CHAR,0);
+        rv->ctVal.str=tks->text;
+        rv->isCtVal=1;rv->isLVal=0;
+
+        printf("\n%s\n",tks->text);
+
+        addInstrA(O_PUSHCT_A,tks->text);
+
+        return 1;
+    }
+    else if(consume(LPAR)){
         if(expr(rv)){
             if(consume(RPAR)){
                 return 1;
-            }else tkerr(crtTk,"Lipseste )");
-        }else tkerr(crtTk,"Lipseste expr");
+            }
+            else{
+                tkerr(crtTk, "Lipseste )");
+            }
+        }
     }
 
-    crtTk = initTk;
+    deleteInstructionsAfter(startLastInstr);
+    crtTk = startTk;
     return 0;
 }
 
 int expr(RetVal *rv){
     Token* initTk = crtTk;
-//     printf("expr ->");
-//     getEnum(crtTk->code);
-//     printf("\n");
+     printf("expr ->");
+     getEnum(crtTk->code);
+     printf("\n");
 
-    if(exprAssign(rv))
-        return 1;
+    Instr *startLastInstr = lastInstruction;
+
+    if(exprAssign(rv)){
+        return true;
+    }
 
     crtTk = initTk;
-    return 0;
+    deleteInstructionsAfter(startLastInstr);
+    return false;
 }
 
 void terminare(){
@@ -2188,114 +3071,28 @@ void terminare(){
     }
 }
 
-Instr *createInstr(int opcode){
-    Instr *i;
-    SAFEALLOC(i,Instr)
-    i->opcode=opcode;
-    return i;
-}
-
-void insertInstrAfter(Instr *after,Instr *i){
-    i->next=after->next;
-    i->last=after;
-    after->next=i;
-    if(i->next==NULL)lastInstruction=i;
-}
-
-Instr *addInstr(int opcode){
-    Instr *i=createInstr(opcode);
-    i->next=NULL;
-    i->last=lastInstruction;
-    if(lastInstruction){
-        lastInstruction->next=i;
-    }else{
-        instructions=i;
-    }
-    lastInstruction=i;
-    return i;
-}
-
-Instr *addInstrAfter(Instr *after,int opcode){
-    Instr *i = createInstr(opcode);
-    insertInstrAfter(after,i);
-    return i;
-}
-
-Instr *addInstrA(int opcode,void *addr){// adauga o instructiune setandu-i si arg[0].addr
-    Instr* x=addInstr(opcode);
-    x->args[0].addr=addr;
-    return x;
-}
-
-Instr *addInstrI(int opcode,long int val){ // adauga o instructiune setandu-i si arg[0].i
-    Instr* x = addInstr(opcode);
-    x->args[0].i = val;
-    return x;
-}
-
-Instr *addInstrII(int opcode,long int val1,long int val2){ // adauga o instructiune setandu-i si arg[0].i, arg[1].i
-    Instr* x=addInstr(opcode);
-    x->args[0].i=val1;
-    x->args[1].i=val2;
-    return x;
-}
-
-void deleteInstructionsAfter(Instr *start) {//sterge toate instructiunile de dupa instructiunea „start”
-    Instr *tmp1, *tmp2;
-    tmp1 = start -> next;
-    while(tmp1){
-        tmp2 = tmp1 -> next;
-        free(tmp1);
-        tmp1 = tmp2;
-    }
-}
-
-Symbol *requireSymbol(Symbols *symbols,const char *name){
-    Symbol **s = symbols->end-1;
-    while(s != symbols->begin-1){
-
-        if(strcmp((*s)->name,name) == 0){
-            return *s;
-        }
-        s = s-1;
-    }
-    err("Symbol not found");
-    return NULL;
-}
-#define GLOBAL_SIZE (32*1024)
-char globals[GLOBAL_SIZE];
-int nGlobals;
-void *allocGlobal(int size){
-    void *p=globals+nGlobals;
-    if(nGlobals+size>GLOBAL_SIZE)err("insufficient globals space");
-    nGlobals+=size;
-    return p;
-}
-
-void testMV(){
-    Instr *L1;
-    int *v = allocGlobal(sizeof(long int));
-    addInstrA(O_PUSHCT_A,v);
-    addInstrI(O_PUSHCT_I,3);
-    addInstrI(O_STORE,sizeof(long int));
-    L1 = addInstrA(O_PUSHCT_A,v);
-    addInstrI(O_LOAD,sizeof(long int));
-    addInstrA(O_CALLEXT,requireSymbol(&symbols,"put_i")->addr);
-    addInstrA(O_PUSHCT_A,v); addInstrA(O_PUSHCT_A,v);
-    addInstrI(O_LOAD,sizeof(long int));
-    addInstrI(O_PUSHCT_I,1);
-    addInstr(O_SUB_I);
-    addInstrI(O_STORE,sizeof(long int));
-    addInstrA(O_PUSHCT_A,v);
-    addInstrI(O_LOAD,sizeof(long int));
-    addInstrA(O_JT_I,L1);
-    addInstr(O_HALT);
-}
+//void testMV(){
+//    Instr *L1;
+//    int *v = allocGlobal(sizeof(long int));
+//    addInstrA(O_PUSHCT_A,v);
+//    addInstrI(O_PUSHCT_I,3);
+//    addInstrI(O_STORE,sizeof(long int));
+//    L1 = addInstrA(O_PUSHCT_A,v);
+//    addInstrI(O_LOAD,sizeof(long int));
+//    addInstrA(O_CALLEXT,requireSymbol(&symbols,"put_i")->addr);
+//    addInstrA(O_PUSHCT_A,v); addInstrA(O_PUSHCT_A,v);
+//    addInstrI(O_LOAD,sizeof(long int));
+//    addInstrI(O_PUSHCT_I,1);
+//    addInstr(O_SUB_I);
+//    addInstrI(O_STORE,sizeof(long int));
+//    addInstrA(O_PUSHCT_A,v);
+//    addInstrI(O_LOAD,sizeof(long int));
+//    addInstrA(O_JT_I,L1);
+//    addInstr(O_HALT);
+//}
 
 void put_i(){
-    long int p = popi();
-    printf("#%ld\n", p);
-    pushi(p);
+    printf("#%ld\n", popi());
 }
 
 void get_i(){
@@ -2378,9 +3175,9 @@ void run(Instr *IP){
     char cVal1, cVal2;
     SP = stack;
     stackAfter = stack + STACK_SIZE;
-
     while(true){
         printf("%p/%ld\t", IP, SP-stack);
+        printf("\n\n@%s@\n\n",a[IP->opcode]);
         switch(IP->opcode){
             case O_CALL:
                 aVal1 = IP->args[0].addr;
@@ -2791,10 +3588,11 @@ void run(Instr *IP){
                 IP=IP->next;
                 break;
             case O_PUSHCT_I:
-                iVal1=IP->args[0].i;
+                iVal1 = IP->args[0].i;
                 printf("PUSHCT_I\t%ld\n",iVal1);
+
                 pushi(iVal1);
-                IP=IP->next;
+                IP = IP->next;
                 break;
             case O_PUSHCT_C:
                 cVal1=IP->args[0].i;
@@ -2823,8 +3621,7 @@ void run(Instr *IP){
                 break;
             case O_STORE:
                 iVal1 = IP->args[0].i;
-                if(SP - (sizeof(void*) + iVal1) < stack)
-                    err("not enough stack bytes for SET");
+                if(SP - (sizeof(void*) + iVal1) < stack)err("not enough stack bytes for SET");
                 aVal1 = *(void**)(SP-((sizeof(void*)+iVal1)));
                 printf("STORE\t%ld\t(%p)\n",iVal1,aVal1);
                 memcpy(aVal1,SP-iVal1,iVal1);
@@ -2842,7 +3639,7 @@ void run(Instr *IP){
                 cVal1 = popc();
                 cVal2 = popc();
                 printf("SUB_C\t(%c - %c -> %c)\n", cVal2, cVal1, cVal2 - cVal1);
-                pushd(cVal2 - cVal1);
+                pushc(cVal2 - cVal1);
                 IP=IP->next;
                 break;
             case O_SUB_D:
@@ -2941,8 +3738,9 @@ int main(int argc, char const *argv[]){
 
     showSymbols(&symbols);
     printf("START VM\n");
-    testMV();
+  //  testMV();
     run(instructions);
+   // showInstr(instructions);
     printf("END VM\n");
     fclose(fis);
     terminare();
